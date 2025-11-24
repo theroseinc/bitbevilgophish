@@ -170,6 +170,16 @@ install_evilginx() {
     info "Building Evilginx..."
     cd /tmp/evilginx2
 
+    # Set Go environment variables for build
+    export HOME=/root
+    export GOPATH=/root/go
+    export GOCACHE=/root/.cache/go-build
+    export PATH=$PATH:/usr/local/go/bin:$GOPATH/bin
+
+    # Create cache directories
+    mkdir -p "$GOCACHE"
+    mkdir -p "$GOPATH"
+
     # Build with Go
     make || error "Failed to build Evilginx"
 
