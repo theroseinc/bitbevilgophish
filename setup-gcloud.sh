@@ -90,7 +90,7 @@ install_go() {
         return
     fi
 
-    GO_VERSION="1.21.6"
+    GO_VERSION="1.22.0"
     wget -q "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz"
     tar -C /usr/local -xzf "go${GO_VERSION}.linux-amd64.tar.gz"
     rm "go${GO_VERSION}.linux-amd64.tar.gz"
