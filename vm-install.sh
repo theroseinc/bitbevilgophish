@@ -26,6 +26,7 @@ INSTALL_DIR="/opt/frameless-bitb"
 EVILGINX_DIR="/opt/evilginx"
 GOPHISH_DIR="/opt/gophish"
 GO_VERSION="1.22.0"
+EVILGINX_VERSION="${EVILGINX_VERSION:-v3.3.0}"
 GOPHISH_VERSION="0.12.1"
 
 # Logging functions
@@ -134,21 +135,41 @@ install_go() {
     tar -C /usr/local -xzf /tmp/go.tar.gz || error "Failed to extract Go"
     rm -f /tmp/go.tar.gz
 
-    # Add Go to PATH
+    # Add Go to PATH and set environment variables
     info "Configuring Go environment..."
+
+    # Set up Go environment in /root/.profile
     if ! grep -q "/usr/local/go/bin" /root/.profile; then
-        echo 'export PATH=$PATH:/usr/local/go/bin' >> /root/.profile
+        cat >> /root/.profile <<'GOENV'
+export PATH=$PATH:/usr/local/go/bin
+export GOPATH=/root/go
+export GOCACHE=/root/.cache/go-build
+GOENV
     fi
 
+    # Set up Go environment in /etc/profile
     if ! grep -q "/usr/local/go/bin" /etc/profile; then
-        echo 'export PATH=$PATH:/usr/local/go/bin' >> /etc/profile
+        cat >> /etc/profile <<'GOENV'
+export PATH=$PATH:/usr/local/go/bin
+export GOPATH=/root/go
+export GOCACHE=/root/.cache/go-build
+GOENV
     fi
 
+    # Export for current session
     export PATH=$PATH:/usr/local/go/bin
+    export GOPATH=/root/go
+    export GOCACHE=/root/.cache/go-build
+
+    # Create Go directories
+    mkdir -p "$GOPATH"
+    mkdir -p "$GOCACHE"
 
     # Verify installation
     if command -v go &> /dev/null; then
         log "Go $(go version | awk '{print $3}') installed successfully"
+        info "GOPATH: $GOPATH"
+        info "GOCACHE: $GOCACHE"
     else
         error "Go installation failed"
     fi
@@ -158,16 +179,17 @@ install_go() {
 install_evilginx() {
     section "STEP 4: Installing Evilginx Framework"
 
-    info "Cloning Evilginx repository..."
+    info "Cloning Evilginx ${EVILGINX_VERSION} repository..."
 
     # Remove old clone if exists
     if [ -d "/tmp/evilginx2" ]; then
         rm -rf /tmp/evilginx2
     fi
 
-    git clone https://github.com/kgretzky/evilginx2 /tmp/evilginx2 || error "Failed to clone Evilginx"
+    # Clone specific version (Evilginx 3.3.0)
+    git clone --branch "${EVILGINX_VERSION}" --depth 1 https://github.com/kgretzky/evilginx2 /tmp/evilginx2 || error "Failed to clone Evilginx ${EVILGINX_VERSION}"
 
-    info "Building Evilginx..."
+    info "Building Evilginx ${EVILGINX_VERSION}..."
     cd /tmp/evilginx2
 
     # Set Go environment variables for build
@@ -179,6 +201,13 @@ install_evilginx() {
     # Create cache directories
     mkdir -p "$GOCACHE"
     mkdir -p "$GOPATH"
+
+    # Verify Go is accessible
+    if ! command -v go &> /dev/null; then
+        error "Go is not in PATH. Installation failed."
+    fi
+
+    info "Go version: $(go version)"
 
     # Build with Go
     make || error "Failed to build Evilginx"
@@ -786,7 +815,7 @@ show_summary() {
     echo -e "${GREEN}✓ System updated${NC}"
     echo -e "${GREEN}✓ All dependencies installed${NC}"
     echo -e "${GREEN}✓ Go ${GO_VERSION} installed${NC}"
-    echo -e "${GREEN}✓ Evilginx installed${NC}"
+    echo -e "${GREEN}✓ Evilginx ${EVILGINX_VERSION} installed${NC}"
     echo -e "${GREEN}✓ GoPhish ${GOPHISH_VERSION} installed${NC}"
     echo -e "${GREEN}✓ Apache configured${NC}"
     echo -e "${GREEN}✓ SSL certificates generated${NC}"
