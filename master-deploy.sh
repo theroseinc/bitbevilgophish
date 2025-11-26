@@ -156,14 +156,37 @@ setup_project() {
     gcloud config set project "$PROJECT_ID" || error "Failed to set project"
     log "Active project set to: $PROJECT_ID"
 
-    # Check billing
+    # Automatically link billing account
     echo ""
-    warning "⚠️  BILLING REQUIRED ⚠️"
-    info "You MUST enable billing for this project"
-    info "Visit: https://console.cloud.google.com/billing/linkedaccount?project=$PROJECT_ID"
-    echo ""
-    prompt "Press ENTER after enabling billing..."
-    read -r
+    info "Checking for billing accounts..."
+
+    # Get the first active billing account
+    BILLING_ACCOUNT=$(gcloud beta billing accounts list --filter="open=true" --format="value(name)" --limit=1 2>/dev/null)
+
+    if [ -z "$BILLING_ACCOUNT" ]; then
+        echo ""
+        warning "⚠️  NO BILLING ACCOUNT FOUND ⚠️"
+        error "You must have an active billing account. Create one at: https://console.cloud.google.com/billing"
+    fi
+
+    info "Found billing account: $BILLING_ACCOUNT"
+    info "Linking billing account to project..."
+
+    gcloud beta billing projects link "$PROJECT_ID" --billing-account="$BILLING_ACCOUNT" || {
+        echo ""
+        warning "⚠️  AUTOMATIC BILLING LINK FAILED ⚠️"
+        info "Please manually enable billing for this project"
+        info "Visit: https://console.cloud.google.com/billing/linkedaccount?project=$PROJECT_ID"
+        echo ""
+        prompt "Press ENTER after enabling billing..."
+        read -r
+    }
+
+    log "Billing linked successfully"
+
+    # Wait for billing to propagate
+    info "Waiting for billing to propagate (10 seconds)..."
+    sleep 10
 
     log "Project setup complete"
 }
