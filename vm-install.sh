@@ -90,9 +90,6 @@ install_dependencies() {
         gcc
         g++
         build-essential
-        apache2
-        certbot
-        python3-certbot-apache
         screen
         net-tools
         ufw
@@ -636,19 +633,18 @@ create_management_scripts() {
     cat > /usr/local/bin/bitb-start <<'EOF'
 #!/bin/bash
 echo "Starting all services..."
-systemctl start apache2
 systemctl start gophish
 
 # Start Evilginx in screen if not running
 if ! screen -ls | grep -q "\.evilginx\s"; then
     echo "Starting Evilginx in screen..."
-    screen -dmS evilginx bash -c "cd /opt/evilginx && ./evilginx -p /opt/evilginx/phishlets -g /root/.evilginx"
+    screen -dmS evilginx bash -c "cd /opt/evilginx && ./evilginx -p /opt/evilginx/phishlets -c /root/.evilginx"
 else
     echo "Evilginx screen session already running"
 fi
 
 echo "All services started"
-systemctl status apache2 gophish --no-pager
+systemctl status gophish --no-pager
 echo ""
 echo "Evilginx status: $(screen -ls | grep -q '\.evilginx\s' && echo 'Running in screen' || echo 'Not running')"
 EOF
@@ -658,7 +654,6 @@ EOF
     cat > /usr/local/bin/bitb-stop <<'EOF'
 #!/bin/bash
 echo "Stopping all services..."
-systemctl stop apache2
 systemctl stop gophish
 
 # Kill Evilginx screen session
@@ -675,7 +670,6 @@ EOF
     cat > /usr/local/bin/bitb-restart <<'EOF'
 #!/bin/bash
 echo "Restarting all services..."
-systemctl restart apache2
 systemctl restart gophish
 
 # Restart Evilginx screen session
@@ -684,10 +678,10 @@ if screen -ls | grep -q "\.evilginx\s"; then
     screen -S evilginx -X quit
     sleep 2
 fi
-screen -dmS evilginx bash -c "cd /opt/evilginx && ./evilginx -p /opt/evilginx/phishlets -g /root/.evilginx"
+screen -dmS evilginx bash -c "cd /opt/evilginx && ./evilginx -p /opt/evilginx/phishlets -c /root/.evilginx"
 
 echo "All services restarted"
-systemctl status apache2 gophish --no-pager
+systemctl status gophish --no-pager
 echo ""
 echo "Evilginx status: $(screen -ls | grep -q '\.evilginx\s' && echo 'Running in screen' || echo 'Not running')"
 EOF
@@ -698,20 +692,17 @@ EOF
 #!/bin/bash
 echo "Service Status:"
 echo ""
-echo "=== Apache2 ==="
-systemctl status apache2 --no-pager | head -n 3
-echo ""
 echo "=== GoPhish ==="
 systemctl status gophish --no-pager | head -n 3
 echo ""
 echo "=== Evilginx ==="
 if screen -ls | grep -q "\.evilginx\s"; then
     echo "Status: Running in screen session 'evilginx'"
-    echo "To access: screen -r evilginx"
+    echo "To access: sudo screen -r evilginx"
     echo "To detach: Press Ctrl+A then D"
 else
     echo "Status: Not running"
-    echo "To start: bitb-start"
+    echo "To start: sudo bitb-start"
 fi
 EOF
     chmod +x /usr/local/bin/bitb-status
@@ -722,29 +713,22 @@ EOF
 SERVICE="${1:-all}"
 
 case $SERVICE in
-    apache|apache2)
-        echo "=== Apache Logs ==="
-        tail -n 100 /var/log/apache2/error.log
-        ;;
     evilginx)
         echo "=== Evilginx Screen Session ==="
         echo "Evilginx runs in screen. To view live:"
-        echo "  screen -r evilginx"
+        echo "  sudo screen -r evilginx"
         echo ""
         echo "Screen session status:"
-        screen -ls | grep -q "\.evilginx\s" && echo "  Running" || echo "  Not running"
+        sudo screen -ls | grep -q "\.evilginx\s" && echo "  Running" || echo "  Not running"
         ;;
     gophish)
         echo "=== GoPhish Logs ==="
         journalctl -u gophish -n 100 --no-pager
         ;;
     *)
-        echo "=== Apache Logs ==="
-        tail -n 50 /var/log/apache2/error.log
-        echo ""
         echo "=== Evilginx ==="
-        echo "Screen session: $(screen -ls | grep -q '\.evilginx\s' && echo 'Running' || echo 'Not running')"
-        echo "To access: screen -r evilginx"
+        echo "Screen session: $(sudo screen -ls | grep -q '\.evilginx\s' && echo 'Running' || echo 'Not running')"
+        echo "To access: sudo screen -r evilginx"
         echo ""
         echo "=== GoPhish Logs ==="
         journalctl -u gophish -n 50 --no-pager
@@ -758,21 +742,16 @@ EOF
 
 # Start services
 start_services() {
-    section "STEP 14: Starting All Services"
+    section "STEP 14: Starting GoPhish Service"
 
-    info "Enabling services to start on boot..."
-    systemctl enable apache2 || true
+    info "Enabling GoPhish to start on boot..."
     systemctl enable gophish || true
-
-    info "Starting Apache..."
-    systemctl start apache2 || warning "Failed to start Apache"
-    sleep 2
 
     info "Starting GoPhish..."
     systemctl start gophish || warning "Failed to start GoPhish"
     sleep 2
 
-    log "Apache and GoPhish started successfully"
+    log "GoPhish started successfully"
     info "Evilginx will be started and configured in the next step..."
 }
 
@@ -787,7 +766,7 @@ start_and_configure_evilginx() {
     sleep 1
 
     # Start Evilginx in detached screen session
-    screen -dmS evilginx bash -c "cd ${EVILGINX_DIR} && ./evilginx -p ${EVILGINX_DIR}/phishlets -g /root/.evilginx"
+    screen -dmS evilginx bash -c "cd ${EVILGINX_DIR} && ./evilginx -p ${EVILGINX_DIR}/phishlets -c /root/.evilginx"
 
     info "Waiting for Evilginx to initialize..."
     sleep 8
@@ -831,9 +810,7 @@ show_summary() {
     echo -e "${GREEN}✓ Go ${GO_VERSION} installed${NC}"
     echo -e "${GREEN}✓ Evilginx ${EVILGINX_VERSION} installed${NC}"
     echo -e "${GREEN}✓ GoPhish ${GOPHISH_VERSION} installed${NC}"
-    echo -e "${GREEN}✓ Apache configured${NC}"
-    echo -e "${GREEN}✓ SSL certificates generated${NC}"
-    echo -e "${GREEN}✓ Frameless BITB files deployed${NC}"
+    echo -e "${GREEN}✓ Evilginx configured on port 443${NC}"
     echo -e "${GREEN}✓ Firewall configured${NC}"
     echo -e "${GREEN}✓ Services created and started${NC}"
     echo ""
@@ -854,14 +831,13 @@ show_summary() {
     echo -e "${CYAN}  MANAGEMENT COMMANDS${NC}"
     echo -e "${CYAN}═══════════════════════════════════════════════════════════${NC}"
     echo ""
-    echo "  bitb-start      - Start all services"
-    echo "  bitb-stop       - Stop all services"
-    echo "  bitb-restart    - Restart all services"
-    echo "  bitb-status     - Check service status"
-    echo "  bitb-logs       - View all logs"
-    echo "  bitb-logs apache    - View Apache logs only"
-    echo "  bitb-logs evilginx  - View Evilginx logs only"
-    echo "  bitb-logs gophish   - View GoPhish logs only"
+    echo "  sudo bitb-start      - Start all services"
+    echo "  sudo bitb-stop       - Stop all services"
+    echo "  sudo bitb-restart    - Restart all services"
+    echo "  bitb-status          - Check service status"
+    echo "  bitb-logs            - View all logs"
+    echo "  bitb-logs evilginx   - View Evilginx session info"
+    echo "  bitb-logs gophish    - View GoPhish logs only"
     echo ""
     echo -e "${CYAN}═══════════════════════════════════════════════════════════${NC}"
     echo -e "${CYAN}  INSTALLATION DIRECTORIES${NC}"
@@ -869,21 +845,20 @@ show_summary() {
     echo ""
     echo "  Evilginx:        ${EVILGINX_DIR}"
     echo "  GoPhish:         ${GOPHISH_DIR}"
-    echo "  BITB Pages:      /var/www/"
-    echo "  Apache Config:   /etc/apache2/sites-enabled/000-default.conf"
-    echo "  SSL Certs:       /etc/ssl/localcerts/${DOMAIN}/"
+    echo "  Evilginx Config: /root/.evilginx"
+    echo "  Phishlets:       ${EVILGINX_DIR}/phishlets"
     echo ""
     echo -e "${CYAN}═══════════════════════════════════════════════════════════${NC}"
     echo -e "${CYAN}  NEXT STEPS${NC}"
     echo -e "${CYAN}═══════════════════════════════════════════════════════════${NC}"
     echo ""
     echo "1. Verify services are running: bitb-status"
-    echo "2. Check logs for any errors: bitb-logs"
+    echo "2. Access Evilginx console: sudo screen -r evilginx"
     echo "3. Ensure DNS records point to: $SERVER_IP"
-    echo "4. Test phishing page: https://login.${DOMAIN}/?auth=2"
-    echo "5. Access GoPhish admin (default password shown on first login)"
-    echo "6. Get Let's Encrypt certificates (optional):"
-    echo "     certbot certonly --apache -d ${DOMAIN} -d login.${DOMAIN}"
+    echo "4. Configure phishlets in Evilginx (already done for O365)"
+    echo "5. Test phishing page: https://login.${DOMAIN}/ (get URL from lures)"
+    echo "6. Access GoPhish admin at https://$SERVER_IP:${GOPHISH_ADMIN_PORT}"
+    echo "7. DNS propagation may take 5-60 minutes"
     echo ""
     echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
     echo -e "${GREEN}  Installation successful! System is ready for use.${NC}"
@@ -894,7 +869,7 @@ show_summary() {
 # Main installation flow
 main() {
     echo "========================================="
-    echo "Frameless BITB - Automated Installation"
+    echo "Evilginx + GoPhish - Automated Installation"
     echo "Domain: ${DOMAIN}"
     echo "========================================="
     echo ""
@@ -906,10 +881,11 @@ main() {
     install_evilginx
     install_gophish
     configure_evilginx
-    configure_apache
-    setup_ssl
-    setup_frameless_bitb
-    create_apache_config
+    # Apache removed - Evilginx handles port 443 directly
+    # configure_apache
+    # setup_ssl
+    # setup_frameless_bitb
+    # create_apache_config
     configure_firewall
     create_services
     create_management_scripts
