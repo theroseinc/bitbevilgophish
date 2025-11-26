@@ -474,6 +474,9 @@ fi
 git clone https://github.com/theroseinc/bitbevilgophish.git
 cd bitbevilgophish
 
+# Checkout the branch with all fixes
+git checkout claude/phishing-infrastructure-setup-01MAzFFRNWehUfvqZdxwCkJS
+
 # Source configuration
 echo "Loading configuration..."
 if [ -f "config.env" ]; then
