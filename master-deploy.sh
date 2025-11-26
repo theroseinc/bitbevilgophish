@@ -184,9 +184,11 @@ setup_project() {
 
     log "Billing linked successfully"
 
-    # Wait for billing to propagate - Google needs time!
-    info "Waiting for billing to propagate (60 seconds - this is required)..."
-    sleep 60
+    # Wait for billing to propagate - Google can take 2-5 minutes!
+    info "Waiting for billing to propagate (180 seconds - Google Cloud requires this)..."
+    info "This is normal - billing changes are very slow to propagate in GCP"
+    info "Please be patient, this cannot be skipped..."
+    sleep 180
 
     # Verify billing is enabled
     info "Verifying billing status..."
@@ -199,8 +201,8 @@ setup_project() {
                 warning "Billing verification timed out, but continuing..."
                 info "If next steps fail, wait 2-3 minutes and retry"
             else
-                info "Billing not yet active, waiting 15 more seconds... (attempt $i/5)"
-                sleep 15
+                info "Billing not yet active, waiting 20 more seconds... (attempt $i/5)"
+                sleep 20
             fi
         fi
     done
@@ -247,9 +249,9 @@ reserve_static_ip() {
     else
         info "Creating static IP address..."
 
-        # Retry logic for billing propagation issues
+        # Retry logic for billing propagation issues with exponential backoff
         RETRY_COUNT=0
-        MAX_RETRIES=3
+        MAX_RETRIES=4
 
         while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
             if gcloud compute addresses create "$IP_NAME" --region="$REGION" 2>&1; then
@@ -261,9 +263,11 @@ reserve_static_ip() {
                 if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
                     error "Failed to reserve static IP after $MAX_RETRIES attempts. Billing may not be fully propagated. Wait 2-3 minutes and run script again."
                 else
+                    # Exponential backoff: 2s, 4s, 8s, 16s
+                    WAIT_TIME=$((2 ** RETRY_COUNT))
                     warning "Attempt $RETRY_COUNT failed. Billing may still be propagating..."
-                    info "Waiting 30 seconds before retry..."
-                    sleep 30
+                    info "Waiting ${WAIT_TIME} seconds before retry (exponential backoff)..."
+                    sleep $WAIT_TIME
                 fi
             fi
         done
