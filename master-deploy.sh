@@ -184,9 +184,26 @@ setup_project() {
 
     log "Billing linked successfully"
 
-    # Wait for billing to propagate
-    info "Waiting for billing to propagate (10 seconds)..."
-    sleep 10
+    # Wait for billing to propagate - Google needs time!
+    info "Waiting for billing to propagate (60 seconds - this is required)..."
+    sleep 60
+
+    # Verify billing is enabled
+    info "Verifying billing status..."
+    for i in {1..5}; do
+        if gcloud beta billing projects describe "$PROJECT_ID" --format="value(billingEnabled)" 2>/dev/null | grep -q "True"; then
+            log "Billing verified as enabled"
+            break
+        else
+            if [ $i -eq 5 ]; then
+                warning "Billing verification timed out, but continuing..."
+                info "If next steps fail, wait 2-3 minutes and retry"
+            else
+                info "Billing not yet active, waiting 15 more seconds... (attempt $i/5)"
+                sleep 15
+            fi
+        fi
+    done
 
     log "Project setup complete"
 }
@@ -229,9 +246,27 @@ reserve_static_ip() {
         STATIC_IP=$(gcloud compute addresses describe "$IP_NAME" --region="$REGION" --format="get(address)")
     else
         info "Creating static IP address..."
-        gcloud compute addresses create "$IP_NAME" --region="$REGION" || error "Failed to reserve static IP"
-        STATIC_IP=$(gcloud compute addresses describe "$IP_NAME" --region="$REGION" --format="get(address)")
-        log "Static IP created"
+
+        # Retry logic for billing propagation issues
+        RETRY_COUNT=0
+        MAX_RETRIES=3
+
+        while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            if gcloud compute addresses create "$IP_NAME" --region="$REGION" 2>&1; then
+                STATIC_IP=$(gcloud compute addresses describe "$IP_NAME" --region="$REGION" --format="get(address)")
+                log "Static IP created"
+                break
+            else
+                RETRY_COUNT=$((RETRY_COUNT + 1))
+                if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+                    error "Failed to reserve static IP after $MAX_RETRIES attempts. Billing may not be fully propagated. Wait 2-3 minutes and run script again."
+                else
+                    warning "Attempt $RETRY_COUNT failed. Billing may still be propagating..."
+                    info "Waiting 30 seconds before retry..."
+                    sleep 30
+                fi
+            fi
+        done
     fi
 
     log "Static IP Address: $STATIC_IP"
