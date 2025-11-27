@@ -156,14 +156,56 @@ setup_project() {
     gcloud config set project "$PROJECT_ID" || error "Failed to set project"
     log "Active project set to: $PROJECT_ID"
 
-    # Check billing
+    # Automatically link billing account
     echo ""
-    warning "⚠️  BILLING REQUIRED ⚠️"
-    info "You MUST enable billing for this project"
-    info "Visit: https://console.cloud.google.com/billing/linkedaccount?project=$PROJECT_ID"
-    echo ""
-    prompt "Press ENTER after enabling billing..."
-    read -r
+    info "Checking for billing accounts..."
+
+    # Get the first active billing account
+    BILLING_ACCOUNT=$(gcloud beta billing accounts list --filter="open=true" --format="value(name)" --limit=1 2>/dev/null)
+
+    if [ -z "$BILLING_ACCOUNT" ]; then
+        echo ""
+        warning "⚠️  NO BILLING ACCOUNT FOUND ⚠️"
+        error "You must have an active billing account. Create one at: https://console.cloud.google.com/billing"
+    fi
+
+    info "Found billing account: $BILLING_ACCOUNT"
+    info "Linking billing account to project..."
+
+    gcloud beta billing projects link "$PROJECT_ID" --billing-account="$BILLING_ACCOUNT" || {
+        echo ""
+        warning "⚠️  AUTOMATIC BILLING LINK FAILED ⚠️"
+        info "Please manually enable billing for this project"
+        info "Visit: https://console.cloud.google.com/billing/linkedaccount?project=$PROJECT_ID"
+        echo ""
+        prompt "Press ENTER after enabling billing..."
+        read -r
+    }
+
+    log "Billing linked successfully"
+
+    # Wait for billing to propagate - Google can take 2-5 minutes!
+    info "Waiting for billing to propagate (180 seconds - Google Cloud requires this)..."
+    info "This is normal - billing changes are very slow to propagate in GCP"
+    info "Please be patient, this cannot be skipped..."
+    sleep 180
+
+    # Verify billing is enabled
+    info "Verifying billing status..."
+    for i in {1..5}; do
+        if gcloud beta billing projects describe "$PROJECT_ID" --format="value(billingEnabled)" 2>/dev/null | grep -q "True"; then
+            log "Billing verified as enabled"
+            break
+        else
+            if [ $i -eq 5 ]; then
+                warning "Billing verification timed out, but continuing..."
+                info "If next steps fail, wait 2-3 minutes and retry"
+            else
+                info "Billing not yet active, waiting 20 more seconds... (attempt $i/5)"
+                sleep 20
+            fi
+        fi
+    done
 
     log "Project setup complete"
 }
@@ -206,9 +248,29 @@ reserve_static_ip() {
         STATIC_IP=$(gcloud compute addresses describe "$IP_NAME" --region="$REGION" --format="get(address)")
     else
         info "Creating static IP address..."
-        gcloud compute addresses create "$IP_NAME" --region="$REGION" || error "Failed to reserve static IP"
-        STATIC_IP=$(gcloud compute addresses describe "$IP_NAME" --region="$REGION" --format="get(address)")
-        log "Static IP created"
+
+        # Retry logic for billing propagation issues with exponential backoff
+        RETRY_COUNT=0
+        MAX_RETRIES=4
+
+        while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            if gcloud compute addresses create "$IP_NAME" --region="$REGION" 2>&1; then
+                STATIC_IP=$(gcloud compute addresses describe "$IP_NAME" --region="$REGION" --format="get(address)")
+                log "Static IP created"
+                break
+            else
+                RETRY_COUNT=$((RETRY_COUNT + 1))
+                if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+                    error "Failed to reserve static IP after $MAX_RETRIES attempts. Billing may not be fully propagated. Wait 2-3 minutes and run script again."
+                else
+                    # Exponential backoff: 2s, 4s, 8s, 16s
+                    WAIT_TIME=$((2 ** RETRY_COUNT))
+                    warning "Attempt $RETRY_COUNT failed. Billing may still be propagating..."
+                    info "Waiting ${WAIT_TIME} seconds before retry (exponential backoff)..."
+                    sleep $WAIT_TIME
+                fi
+            fi
+        done
     fi
 
     log "Static IP Address: $STATIC_IP"
@@ -411,6 +473,9 @@ fi
 
 git clone https://github.com/theroseinc/bitbevilgophish.git
 cd bitbevilgophish
+
+# Checkout the branch with all fixes
+git checkout claude/phishing-infrastructure-setup-01MAzFFRNWehUfvqZdxwCkJS
 
 # Source configuration
 echo "Loading configuration..."

